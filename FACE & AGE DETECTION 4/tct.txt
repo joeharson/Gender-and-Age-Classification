@@ -1,0 +1,735 @@
+'rtsp://admin:Admin@123@103.110.239.201:555/live'
+rtsp://admin:Admin@123@103.110.239.201:560/live
+
+'''
+import cv2
+from deepface import DeepFace
+
+# Initialize webcam
+cap = cv2.VideoCapture(0)
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    # Perform age and gender detection
+    try:
+        results = DeepFace.analyze(frame, actions=['age', 'gender'], enforce_detection=False)
+        for result in results:
+            age = result['age']
+            gender = result['gender']  # This is a dictionary with gender probabilities
+
+            # Extract the gender with the highest confidence score
+            dominant_gender = max(gender, key=gender.get)  # Get the key (gender) with the highest value (confidence)
+            confidence = gender[dominant_gender]  # Get the confidence score for the dominant gender
+
+            print(f"Age: {age}, Gender: {dominant_gender} (Confidence: {confidence:.2f})")
+
+            # Display results on the frame
+            cv2.putText(frame, f"Age: {age}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(frame, f"Gender: {dominant_gender} ({confidence:.2f})", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+    except Exception as e:
+        print(f"Error: {e}")
+
+    # Show the frame
+    cv2.imshow("Age and Gender Detection", frame)
+
+    # Exit on 'q' key press
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Release resources
+cap.release()
+cv2.destroyAllWindows()
+'''
+
+
+
+'''
+bounding box model
+
+import cv2
+from deepface import DeepFace
+
+# Initialize webcam
+cap = cv2.VideoCapture(0)
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    # Perform age and gender detection
+    try:
+        # Analyze the frame for age and gender, and also get face regions
+        results = DeepFace.analyze(frame, actions=['age', 'gender'], enforce_detection=False)
+        
+        for result in results:
+            age = result['age']
+            gender = result['gender']  # This is a dictionary with gender probabilities
+            face_region = result['region']  # Get the bounding box of the face
+
+            # Extract the gender with the highest confidence score
+            dominant_gender = max(gender, key=gender.get)  # Get the key (gender) with the highest value (confidence)
+            confidence = gender[dominant_gender]  # Get the confidence score for the dominant gender
+
+            print(f"Age: {age}, Gender: {dominant_gender} (Confidence: {confidence:.2f})")
+
+            # Draw bounding box around the face
+            x, y, w, h = face_region['x'], face_region['y'], face_region['w'], face_region['h']
+            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+
+            # Display results on the frame
+            cv2.putText(frame, f"Age: {age}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+            cv2.putText(frame, f"Gender: {dominant_gender} ({confidence:.2f})", (x, y+h+20), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+    except Exception as e:
+        print(f"Error: {e}")
+
+    # Show the frame
+    cv2.imshow("Age and Gender Detection", frame)
+
+    # Exit on 'q' key press
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Release resources
+cap.release()
+cv2.destroyAllWindows()
+'''
+
+
+
+
+
+'''
+from flask import Flask, render_template, Response, jsonify
+import cv2
+from deepface import DeepFace
+import json
+from datetime import datetime
+from collections import defaultdict
+
+app = Flask(__name__)
+
+# Initialize global variables
+frame_skip = 5
+frame_count = 0
+last_results = None
+rescale_factor = 0.9
+detection_history = []
+statistics = {
+    'total_detections': 0,
+    'gender_stats': defaultdict(int),
+    'age_groups': defaultdict(int),
+    'average_confidence': 0,
+    'last_updated': None
+}
+
+def update_statistics(result):
+    global statistics
+    try:
+        statistics['total_detections'] += 1
+        
+        # Handle gender stats
+        if 'gender' in result:
+            gender = result['gender']
+            statistics['gender_stats'][gender] += 1
+        
+        # Handle age groups
+        if 'age' in result:
+            age = result['age']
+            if age < 18:
+                age_group = 'Under 18'
+            elif age < 30:
+                age_group = '18-29'
+            elif age < 50:
+                age_group = '30-49'
+            else:
+                age_group = '50+'
+            statistics['age_groups'][age_group] += 1
+        
+        # Handle confidence
+        if 'confidence' in result:
+            statistics['average_confidence'] = (
+                (statistics['average_confidence'] * (statistics['total_detections'] - 1) + 
+                result['confidence']) / statistics['total_detections']
+            )
+        
+        statistics['last_updated'] = datetime.now().strftime('%H:%M:%S')
+    except Exception as e:
+        print(f"Error updating statistics: {e}")
+
+def generate_frames():
+    global frame_count, last_results, detection_history
+    cap = cv2.VideoCapture(0)  # Using webcam
+    
+    if not cap.isOpened():
+        print("Error: Could not open camera")
+        return
+    
+    no_detection_count = 0
+    
+    while True:
+        try:
+            ret, frame = cap.read()
+            if not ret:
+                print("Error: Could not read frame")
+                break
+                
+            frame_count += 1
+            resized_frame = cv2.resize(frame, (0, 0), fx=rescale_factor, fy=rescale_factor)
+            
+            if frame_count % frame_skip == 0:
+                try:
+                    results = DeepFace.analyze(resized_frame, actions=['age', 'gender'], enforce_detection=False)
+                    
+                    # Convert single result to list for consistent handling
+                    if isinstance(results, dict):
+                        results = [results]
+                        
+                    if results and len(results) > 0:
+                        last_results = results
+                        no_detection_count = 0
+                        
+                        for result in results:
+                            try:
+                                gender_dict = result.get('gender', {})
+                                if isinstance(gender_dict, dict):
+                                    dominant_gender = max(gender_dict.items(), key=lambda x: x[1])[0]
+                                    confidence = max(gender_dict.values())
+                                else:
+                                    dominant_gender = str(gender_dict)
+                                    confidence = 1.0
+                                
+                                detection_data = {
+                                    'timestamp': datetime.now().strftime('%H:%M:%S'),
+                                    'age': result.get('age', 'Unknown'),
+                                    'gender': dominant_gender,
+                                    'confidence': confidence,
+                                    'status': 'detected'
+                                }
+                                
+                                detection_history.append(detection_data)
+                                update_statistics(detection_data)
+                            except Exception as e:
+                                print(f"Error processing detection result: {e}")
+                    else:
+                        no_detection_count += 1
+                        if no_detection_count >= 10:
+                            detection_data = {
+                                'timestamp': datetime.now().strftime('%H:%M:%S'),
+                                'status': 'no_face',
+                                'message': 'No face detected'
+                            }
+                            detection_history.append(detection_data)
+                            
+                    detection_history = detection_history[-10:]  # Keep only last 10 detections
+                    
+                except Exception as e:
+                    print(f"Error in DeepFace analysis: {e}")
+                    no_detection_count += 1
+            
+            # Add status text to frame
+            if no_detection_count >= 10:
+                cv2.putText(resized_frame, "No face detected", (30, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            
+            if last_results:
+                for result in last_results:
+                    try:
+                        if 'region' in result:
+                            face_region = result['region']
+                            age = result.get('age', 'Unknown')
+                            
+                            gender_dict = result.get('gender', {})
+                            if isinstance(gender_dict, dict):
+                                dominant_gender = max(gender_dict.items(), key=lambda x: x[1])[0]
+                                confidence = max(gender_dict.values())
+                            else:
+                                dominant_gender = str(gender_dict)
+                                confidence = 1.0
+                            
+                            x, y, w, h = face_region['x'], face_region['y'], face_region['w'], face_region['h']
+                            cv2.rectangle(resized_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                            cv2.putText(resized_frame, f"Age: {age}", (x, y-10), 
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                            cv2.putText(resized_frame, f"Gender: {dominant_gender} ({confidence:.2f})", 
+                                      (x, y+h+20), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                    except Exception as e:
+                        print(f"Error drawing detection results: {e}")
+            
+            ret, buffer = cv2.imencode('.jpg', resized_frame)
+            frame = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                   
+        except Exception as e:
+            print(f"Error in main loop: {e}")
+            continue
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(), 
+                   mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/get_detection_history')
+def get_detection_history():
+    return jsonify({
+        'history': detection_history,
+        'statistics': statistics
+    })
+
+if __name__ == '__main__':
+    app.run(debug=True) 
+
+    <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Age and Gender Detection</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --primary-color: #2196F3;
+            --secondary-color: #1976D2;
+            --background-color: #E3F2FD;
+            --text-color: #333;
+        }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+            background: var(--background-color);
+            color: var(--text-color);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            padding: 20px;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .content-wrapper {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+        }
+
+        .video-container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .video-feed {
+            width: 100%;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .stats-container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .stats-header {
+            color: var(--primary-color);
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid var(--primary-color);
+        }
+
+        .detection-history {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .detection-item {
+            padding: 10px;
+            margin: 10px 0;
+            background: #f5f5f5;
+            border-radius: 5px;
+            border-left: 4px solid var(--primary-color);
+        }
+
+        .stats-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+
+        .stats-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: var(--primary-color);
+        }
+
+        .info-panel {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            grid-column: 1 / -1;
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .feature-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .stat-box {
+            background: linear-gradient(145deg, #ffffff, #f0f0f0);
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 5px 5px 15px #d1d1d1, -5px -5px 15px #ffffff;
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: var(--primary-color);
+            margin: 10px 0;
+        }
+        
+        .stat-label {
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .charts-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .chart-card {
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .detection-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            margin: 10px 0;
+            background: linear-gradient(145deg, #ffffff, #f0f0f0);
+            border-radius: 10px;
+            box-shadow: 5px 5px 15px #d1d1d1, -5px -5px 15px #ffffff;
+        }
+        
+        .pulse-animation {
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        @media (max-width: 768px) {
+            .content-wrapper {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .no-detection {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            text-align: center;
+            animation: fadeInOut 2s infinite;
+        }
+        
+        .detection-item.no-face {
+            background: linear-gradient(145deg, #ffebee, #ffcdd2);
+            border-left: 4px solid #c62828;
+        }
+        
+        @keyframes fadeInOut {
+            0% { opacity: 0.7; }
+            50% { opacity: 1; }
+            100% { opacity: 0.7; }
+        }
+        
+        .status-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .status-active {
+            background: #c8e6c9;
+            color: #2e7d32;
+        }
+        
+        .status-inactive {
+            background: #ffcdd2;
+            color: #c62828;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Advanced Age and Gender Detection System</h1>
+            <p>Real-time face analysis using deep learning</p>
+        </div>
+
+        <div class="content-wrapper">
+            <div class="video-container">
+                <h2>Live Feed</h2>
+                <div style="position: relative;">
+                    <img src="{{ url_for('video_feed') }}" class="video-feed" alt="Video Feed">
+                    <div id="status-indicator" class="status-indicator"></div>
+                </div>
+            </div>
+
+            <div class="stats-container">
+                <h2 class="stats-header">Live Statistics</h2>
+                <div class="stats-grid" id="stats-grid">
+                    <!-- Statistics will be populated here -->
+                </div>
+                
+                <div class="charts-container">
+                    <div class="chart-card">
+                        <canvas id="genderChart"></canvas>
+                    </div>
+                    <div class="chart-card">
+                        <canvas id="ageChart"></canvas>
+                    </div>
+                </div>
+                
+                <h3>Recent Detections</h3>
+                <div class="detection-history" id="detection-history">
+                    <!-- Detection history will be populated here -->
+                </div>
+            </div>
+
+            <div class="info-panel">
+                <h2>System Features</h2>
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <h3>Age Detection</h3>
+                        <p>Accurate age estimation using deep learning models</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>Gender Classification</h3>
+                        <p>Real-time gender detection with confidence scores</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>Face Detection</h3>
+                        <p>Advanced face detection with bounding boxes</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>Real-time Analysis</h3>
+                        <p>Continuous monitoring and instant results</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let genderChart, ageChart;
+        
+        function initializeCharts() {
+            const genderCtx = document.getElementById('genderChart').getContext('2d');
+            const ageCtx = document.getElementById('ageChart').getContext('2d');
+            
+            genderChart = new Chart(genderCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Male', 'Female'],
+                    datasets: [{
+                        data: [0, 0],
+                        backgroundColor: ['#2196F3', '#FF4081']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Gender Distribution'
+                        }
+                    }
+                }
+            });
+            
+            ageChart = new Chart(ageCtx, {
+                type: 'bar',
+                data: {
+                    labels: ['Under 18', '18-29', '30-49', '50+'],
+                    datasets: [{
+                        label: 'Age Groups',
+                        data: [0, 0, 0, 0],
+                        backgroundColor: '#2196F3'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Age Distribution'
+                        }
+                    }
+                }
+            });
+        }
+        
+        function updateCharts(statistics) {
+            genderChart.data.datasets[0].data = [
+                statistics.gender_stats.Man || 0,
+                statistics.gender_stats.Woman || 0
+            ];
+            genderChart.update();
+            
+            ageChart.data.datasets[0].data = [
+                statistics.age_groups['Under 18'] || 0,
+                statistics.age_groups['18-29'] || 0,
+                statistics.age_groups['30-49'] || 0,
+                statistics.age_groups['50+'] || 0
+            ];
+            ageChart.update();
+        }
+        
+        function updateDetectionHistory(history) {
+            const historyDiv = document.getElementById('detection-history');
+            historyDiv.innerHTML = '';
+            
+            let noDetectionStreak = true;
+            
+            history.forEach(detection => {
+                const detectionEl = document.createElement('div');
+                
+                if (detection.status === 'no_face') {
+                    detectionEl.className = 'detection-item no-face';
+                    detectionEl.innerHTML = `
+                        <div>
+                            <strong>Time:</strong> ${detection.timestamp}
+                        </div>
+                        <div>
+                            <strong>Status:</strong> ${detection.message}
+                        </div>
+                    `;
+                } else {
+                    noDetectionStreak = false;
+                    detectionEl.className = 'detection-item';
+                    detectionEl.innerHTML = `
+                        <div>
+                            <strong>Time:</strong> ${detection.timestamp}
+                        </div>
+                        <div>
+                            <strong>Age:</strong> ${detection.age} |
+                            <strong>Gender:</strong> ${detection.gender} (${(detection.confidence * 100).toFixed(1)}%)
+                        </div>
+                    `;
+                }
+                
+                historyDiv.appendChild(detectionEl);
+            });
+            
+            // Update status indicator
+            const statusIndicator = document.getElementById('status-indicator');
+            if (noDetectionStreak) {
+                statusIndicator.className = 'status-indicator status-inactive';
+                statusIndicator.textContent = 'No Face Detected';
+            } else {
+                statusIndicator.className = 'status-indicator status-active';
+                statusIndicator.textContent = 'Face Detected';
+            }
+        }
+        
+        function updateStatistics(statistics) {
+            const statsGrid = document.getElementById('stats-grid');
+            statsGrid.innerHTML = `
+                <div class="stat-box ${statistics.total_detections > 0 ? 'pulse-animation' : ''}">
+                    <div class="stat-label">Total Detections</div>
+                    <div class="stat-value">${statistics.total_detections}</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Average Confidence</div>
+                    <div class="stat-value">${(statistics.average_confidence * 100).toFixed(1)}%</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Last Updated</div>
+                    <div class="stat-value">${statistics.last_updated || 'N/A'}</div>
+                </div>
+            `;
+        }
+
+        function updateAll() {
+            fetch('/get_detection_history')
+                .then(response => response.json())
+                .then(data => {
+                    updateDetectionHistory(data.history);
+                    updateStatistics(data.statistics);
+                    updateCharts(data.statistics);
+                });
+        }
+
+        // Initialize charts when the page loads
+        initializeCharts();
+        
+        // Update everything every second
+        setInterval(updateAll, 1000);
+    </script>
+</body>
+</html> 
+'''
+
+
+
+
