@@ -1,4 +1,4 @@
-# 👁️ Face & Age Detection Projects
+# Face & Age Detection Projects
 
 Welcome! This folder contains **4 different projects** for face detection and age/gender prediction. Each project is a different approach to the same problem.
 
