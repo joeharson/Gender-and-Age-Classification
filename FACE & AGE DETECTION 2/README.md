@@ -42,11 +42,6 @@ pip install opencv-python numpy
 python detect.py --rtsp "rtsp://username:password@ip_address:port/path"
 ```
 
-### Example:
-```bash
-python detect.py --rtsp "rtsp://admin:password@192.168.1.100:554/stream1"
-```
-
 ### Using Default RTSP URL:
 If you just run without arguments, it uses the default URL in the code:
 ```bash
