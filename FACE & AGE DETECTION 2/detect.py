@@ -22,7 +22,7 @@ def highlightFace(net, frame, conf_threshold=0.7):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--rtsp', type=str, help="RTSP stream URL", default="rtsp://admin:Admin@123@103.110.239.201:560/live")
+parser.add_argument('--rtsp', type=str, help="RTSP stream URL", default="rtsp://PUT_YOUR_IP/live")
 args = parser.parse_args()
 
 faceProto = "opencv_face_detector.pbtxt"
